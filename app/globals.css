@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 245 245 247;
+}
+
+html, body, #__next {
+  height: 100%;
+}
+
+body { @apply antialiased; }
+
+.glass { backdrop-filter: blur(10px); background: rgba(15, 23, 42, 0.55); }
+
+.scrollbar-thin::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgba(255,255,255,0.2);
+  border-radius: 9999px;
+}
+
