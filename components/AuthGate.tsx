@@ -1,7 +1,7 @@
 "use client"
 import { ReactNode, useEffect, useState } from 'react'
 
-const base = process.env.NODE_ENV === 'production' ? '/family-tree-0.2' : ''
+const base = process.env.NEXT_PUBLIC_BASE_PATH || (process.env.NODE_ENV === 'production' ? '/family-tree-0.2' : '')
 
 export default function AuthGate({ children }: { children: ReactNode }) {
   const [allowed, setAllowed] = useState(false)

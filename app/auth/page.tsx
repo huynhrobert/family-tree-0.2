@@ -7,7 +7,8 @@ export default function AuthPage() {
     e.preventDefault()
     if (pwd === 'H3lloF4mily!') {
       document.cookie = `ft_auth=ok; path=/; max-age=${60 * 60 * 24 * 30}`
-      window.location.href = (process.env.NODE_ENV === 'production' ? '/family-tree-0.2/' : '/')
+      const base = process.env.NEXT_PUBLIC_BASE_PATH || (process.env.NODE_ENV === 'production' ? '/family-tree-0.2' : '')
+      window.location.href = `${base}/`
     } else {
       alert('Incorrect password')
     }
