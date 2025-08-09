@@ -6,6 +6,7 @@ import { Search } from 'lucide-react'
 import { buildTree, layoutTree } from '@/lib/tree'
 import { Marriage, ParentChild, Person, TreeNode } from '@/lib/types'
 import { createClient as createSupabaseClient } from '@/utils/supabase/client'
+import { useEditMode } from '../lib/edit-mode-context'
 import { useRouter } from 'next/navigation'
 
 type Props = {
@@ -23,21 +24,11 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
     [people, marriages, parentChild]
   )
 
-  // blood-only filtering for the rendered tree
-  const minGeneration = useMemo(() => {
-    const gens = Array.from(nodeByIdAll.values()).map(n => n.generation ?? 0)
-    return gens.length ? Math.min(...gens) : 0
-  }, [nodeByIdAll])
-  const isBlood = (id: string) => {
-    const n = nodeByIdAll.get(id)
-    if (!n) return false
-    if ((n.generation ?? 0) === minGeneration) return true
-    return (n.parents?.length ?? 0) > 0
-  }
   // state that influences filtering
   const [query, setQuery] = useState('')
-  const [bloodOnly, setBloodOnly] = useState(true)
   const [collapsedCouples, setCollapsedCouples] = useState<Set<string>>(new Set())
+  const [collapsedSingles, setCollapsedSingles] = useState<Set<string>>(new Set())
+  const { editMode, setEditMode } = useEditMode()
   const coupleKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`)
 
   const hiddenDescendants = useMemo(() => {
@@ -50,6 +41,8 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
         hidden.add(cur)
         const kids = nodeByIdAll.get(cur)?.children ?? []
         for (const k of kids) stack.push(k)
+        const partners = nodeByIdAll.get(cur)?.partners ?? []
+        for (const p of partners) stack.push(p)
       }
     }
     for (const key of collapsedCouples) {
@@ -58,18 +51,29 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
         ...((nodeByIdAll.get(a)?.children) ?? []),
         ...((nodeByIdAll.get(b)?.children) ?? []),
       ])
-      for (const c of children) addSubtree(c)
+      for (const c of children) {
+        addSubtree(c)
+        // Also hide partners of the child (spouses married into the family) and their descendants
+        for (const sp of (nodeByIdAll.get(c)?.partners ?? [])) addSubtree(sp)
+      }
+    }
+    // also hide descendants for collapsed singles
+    for (const singleId of collapsedSingles) {
+      for (const c of (nodeByIdAll.get(singleId)?.children ?? [])) {
+        addSubtree(c)
+        for (const sp of (nodeByIdAll.get(c)?.partners ?? [])) addSubtree(sp)
+      }
     }
     return hidden
-  }, [collapsedCouples, nodeByIdAll])
+  }, [collapsedCouples, collapsedSingles, nodeByIdAll])
 
   const filtered = useMemo(() => {
-    const ids = new Set(people.filter(p => !hiddenDescendants.has(p.id) && (!bloodOnly || isBlood(p.id))).map(p => p.id))
+    const ids = new Set(people.filter(p => !hiddenDescendants.has(p.id)).map(p => p.id))
     const ppl = people.filter(p => ids.has(p.id))
     const mar = marriages.filter(m => ids.has(m.partner_a) && ids.has(m.partner_b))
     const pc = parentChild.filter(pc => ids.has(pc.parent_id) && ids.has(pc.child_id))
     return { ppl, mar, pc }
-  }, [people, marriages, parentChild, bloodOnly, hiddenDescendants])
+  }, [people, marriages, parentChild, hiddenDescendants])
 
   const { nodeById } = useMemo(
     () => buildTree(filtered.ppl, filtered.mar, filtered.pc),
@@ -88,7 +92,75 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
   const [scale, setScale] = useState(0.8)
   const [translate, setTranslate] = useState({ x: 300, y: 160 })
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [collapsedParents, setCollapsedParents] = useState(false)
+  
+  // Helpers to compute Gen 1 collapse sets
+  const computeGen1CollapseSets = useMemo(() => {
+    const gen1Ids = new Set(
+      Array.from(nodeByIdAll.values())
+        .filter((n) => (n.generation ?? 0) === 1)
+        .map((n) => n.id)
+    )
+    const coupleKeys = new Set<string>()
+    for (const m of marriages) {
+      if (gen1Ids.has(m.partner_a) && gen1Ids.has(m.partner_b)) {
+        coupleKeys.add(coupleKey(m.partner_a, m.partner_b))
+      }
+    }
+    const singleIds = new Set<string>()
+    for (const n of nodeByIdAll.values()) {
+      if ((n.generation ?? 0) !== 1) continue
+      const hasPartner = (n.partners?.length ?? 0) > 0
+      const hasChildren = (n.children?.length ?? 0) > 0
+      if (!hasPartner && hasChildren) singleIds.add(n.id)
+    }
+    return { coupleKeys, singleIds }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeByIdAll, marriages])
+
+  // Apply Popo's branch default collapse ONCE at start: keep Bao Hue Chau + To Dung Tran branch open
+  const initialCollapseApplied = useRef(false)
+  useEffect(() => {
+    if (initialCollapseApplied.current) return
+    const normalize = (s: string | null | undefined) => (s ?? '').toLowerCase().trim()
+    const findByName = (first: string, last: string) => {
+      const f = normalize(first)
+      const l = normalize(last)
+      const match = Array.from(nodeByIdAll.values()).find(
+        (n) => normalize(n.first_name || n.preferred_name) === f && normalize(n.last_name) === l
+      )
+      return match?.id || null
+    }
+    const idDung = findByName('to dung', 'tran')
+    const idBaoHue = findByName('bao hue', 'chau')
+    const { coupleKeys, singleIds } = computeGen1CollapseSets
+    const keepKey = idDung && idBaoHue ? coupleKey(idDung, idBaoHue) : null
+    const nextCouples = new Set<string>()
+    for (const key of coupleKeys) {
+      if (keepKey && key === keepKey) continue
+      nextCouples.add(key)
+    }
+    const nextSingles = new Set(singleIds)
+    setCollapsedCouples(nextCouples)
+    setCollapsedSingles(nextSingles)
+    initialCollapseApplied.current = true
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeByIdAll, marriages])
+
+  const collapseAllGen1 = () => {
+    const { coupleKeys, singleIds } = computeGen1CollapseSets
+    setCollapsedCouples(new Set(coupleKeys))
+    setCollapsedSingles(new Set(singleIds))
+  }
+  const expandAll = () => {
+    setCollapsedCouples(new Set())
+    setCollapsedSingles(new Set())
+  }
+  const allGen1Collapsed = useMemo(() => {
+    const { coupleKeys, singleIds } = computeGen1CollapseSets
+    for (const k of coupleKeys) if (!collapsedCouples.has(k)) return false
+    for (const s of singleIds) if (!collapsedSingles.has(s)) return false
+    return true
+  }, [computeGen1CollapseSets, collapsedCouples, collapsedSingles])
   
   const isChildOfCollapsedCouple = (childId: string) => {
     const parents = nodeById.get(childId)?.parents ?? []
@@ -138,6 +210,32 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
     setScale(targetScale)
     const viewport = { w: window.innerWidth, h: window.innerHeight }
     setTranslate({ x: viewport.w / 2 - pos.x * targetScale, y: viewport.h / 2 - pos.y * targetScale })
+  }
+
+  // toggle collapse state for all couple pairings of a person
+  const toggleCollapseForPerson = (personId: string) => {
+    // Use full dataset for partner lookup so behavior is consistent with filters
+    const partners = nodeByIdAll.get(personId)?.partners ?? []
+    if (partners.length === 0) {
+      // toggle single-parent collapse
+      setCollapsedSingles((prev) => {
+        const next = new Set(prev)
+        if (next.has(personId)) next.delete(personId)
+        else next.add(personId)
+        return next
+      })
+      return
+    }
+    setCollapsedCouples((prev) => {
+      const next = new Set(prev)
+      const allPairsCollapsed = partners.every((mateId) => next.has(coupleKey(personId, mateId)))
+      for (const mateId of partners) {
+        const key = coupleKey(personId, mateId)
+        if (allPairsCollapsed) next.delete(key)
+        else next.add(key)
+      }
+      return next
+    })
   }
 
   const fitToView = () => {
@@ -264,8 +362,9 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
 
         {/* Controls row 1 */}
         <div className="sticky top-14 flex items-center gap-2 z-10 bg-slate-900/90 py-2">
-          <label className="inline-flex items-center gap-2 text-xs text-slate-300 mr-2 whitespace-nowrap">
-            <input type="checkbox" checked={bloodOnly} onChange={(e)=>setBloodOnly(e.target.checked)} /> Blood relatives only
+          {/* Popo's branch toggle removed; default collapse applied on load */}
+          <label className="inline-flex items-center gap-2 text-xs text-slate-300 whitespace-nowrap">
+            <input type="checkbox" checked={editMode} onChange={(e)=>setEditMode(e.target.checked)} /> Edit mode
           </label>
         </div>
         {/* Controls row 2 */}
@@ -273,6 +372,7 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
           <button className="rounded bg-slate-800 hover:bg-slate-700 text-slate-100 px-3 py-1" onClick={() => setScale((s)=>Math.min(2, s+0.1))}>+</button>
           <button className="rounded bg-slate-800 hover:bg-slate-700 text-slate-100 px-3 py-1" onClick={() => setScale((s)=>Math.max(0.3, s-0.1))}>-</button>
           <button className="rounded bg-slate-800 hover:bg-slate-700 text-slate-100 px-3 py-1" onClick={fitToView}>Reset</button>
+          <button className="rounded bg-slate-800 hover:bg-slate-700 text-slate-100 px-3 py-1" onClick={() => { allGen1Collapsed ? expandAll() : collapseAllGen1() }}>{allGen1Collapsed ? 'Expand all' : 'Collapse all'}</button>
           <button className="ml-auto rounded bg-blue-600 hover:bg-blue-500 text-white px-3 py-1" onClick={()=>setShowCreate(true)}>Add person</button>
         </div>
 
@@ -280,7 +380,6 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
         {Array.from(new Set(people.map((p) => p.generation ?? 0))).sort((a,b) => a-b).map((g) => {
           const ids = people
             .filter((p) => (p.generation ?? 0) === g)
-            .filter((p) => !bloodOnly || isBlood(p.id))
             .sort((a,b) => {
               const keyA = (nodeById.get(a.id)?.parents ?? []).slice().sort().join('|')
               const keyB = (nodeById.get(b.id)?.parents ?? []).slice().sort().join('|')
@@ -297,20 +396,14 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
             <div key={g} className="space-y-2">
               <div className="flex items-center justify-between">
                 <div className="text-xs uppercase tracking-wide text-slate-400">Generation {g}</div>
-                {g === 2 && (
-                  <button className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
-                    onClick={() => setCollapsedParents(prev => !prev)}>
-                    {collapsedParents ? '+ Expand Gen 2 parents' : '− Collapse Gen 2 parents'}
-                  </button>
-                )}
               </div>
-              {!(g === 2 && collapsedParents) && ids.map((id) => {
+              {ids.map((id) => {
                 const m = nodeById.get(id)
                 if (!m) return null
                 const name = (m.preferred_name || m.first_name || '') + ' ' + (m.last_name || '')
                 if (query && !name.toLowerCase().includes(query.toLowerCase())) return null
                 return (
-                  <button key={id} className="w-full flex items-center gap-3 rounded px-2 py-2 hover:bg-slate-800/70" onClick={() => centerOn(id, 1.2)}>
+                  <button key={id} className="w-full flex items-center gap-3 rounded px-2 py-2 hover:bg-slate-800/70" onClick={() => { centerOn(id, 1.2); if (editMode) setSelectedId(id) }}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     {m.photo ? <img src={m.photo} alt={name} className="h-9 w-9 rounded-full object-cover" /> : <div className="h-9 w-9 rounded-full bg-slate-700 grid place-items-center">👤</div>}
                     <div className="flex-1">
@@ -331,7 +424,7 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
       )}
 
       <main className="flex-1 relative bg-gradient-to-b from-slate-900 to-slate-950">
-        <button className="absolute left-2 top-2 z-20 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-100 px-3 py-1"
+        <button className="absolute left-2 top-2 z-50 rounded bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-semibold px-3 py-1 shadow-lg ring-2 ring-white/40"
           onClick={()=>{ setSidebarOpen(v=>!v); setTimeout(fitToView, 50) }}>
           {sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
         </button>
@@ -351,7 +444,7 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
             {/* edges for parent-child with marriage centroid routing */}
             {(() => {
               const marriedPairs = new Set<string>()
-              for (const m of marriages) {
+              for (const m of filtered.mar) {
                 const a = m.partner_a < m.partner_b ? m.partner_a : m.partner_b
                 const b = m.partner_a < m.partner_b ? m.partner_b : m.partner_a
                 marriedPairs.add(`${a}|${b}`)
@@ -412,7 +505,7 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
             })()}
 
             {/* edges for marriages */}
-            {marriages.map((m) => {
+            {filtered.mar.map((m) => {
               const a = positionById.get(m.partner_a)
               const b = positionById.get(m.partner_b)
               if (!a || !b) return null
@@ -456,7 +549,7 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
               const y = n.y - NODE_H / 2
               return (
                 <foreignObject key={n.id} x={x} y={y} width={NODE_W} height={NODE_H}>
-                  <div className={clsx('rounded-2xl shadow-card text-white flex flex-col items-center justify-center h-full px-3 py-2 cursor-pointer relative', color)} onClick={() => setSelectedId(n.id)}>
+                  <div className={clsx('rounded-2xl shadow-card text-white flex flex-col items-center justify-center h-full px-3 py-2 cursor-pointer relative', color)} onClick={() => { if (editMode) { setSelectedId(n.id) } else { toggleCollapseForPerson(n.id) } }}>
                     <div className="relative mb-2">
                       {person.photo ? (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -480,32 +573,11 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
                         )}
                       </div>
                     </div>
-                    {/* Couple collapse button (only for Gen 2 parents) */}
-                    {(() => {
-                      const depth = n.depth
-                      if (depth !== 1) return null
-                      const partners = person.partners
-                      if (partners.length === 0) return null
-                      const mate = partners[0]
-                      const key = coupleKey(person.id, mate)
-                      // only show on one of the partners (alphabetically first id)
-                      if (person.id !== (person.id < mate ? person.id : mate)) return null
-                      const collapsed = collapsedCouples.has(key)
-                      return (
-                        <button
-                          className="absolute -bottom-7 left-1/2 -translate-x-1/2 text-sm font-bold rounded-full bg-green-500 hover:bg-green-400 text-slate-900 px-3 py-1 border border-green-600 shadow-xl ring-2 ring-white/40 pointer-events-auto z-30"
-                          onClick={(e) => { e.stopPropagation(); setCollapsedCouples(prev => {
-                            const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next
-                          })}}
-                        >
-                          {collapsed ? '+' : '−'}
-                        </button>
-                      )
-                    })()}
                   </div>
                 </foreignObject>
               )
             })}
+
 
             {/* detail modal rendered outside SVG for stability */}
             
@@ -654,26 +726,34 @@ export default function TreeCanvas({ people, marriages, parentChild }: Props) {
                       const childXs = children.length>1 ? children.map((_,i)=> 100 + i*(440/(children.length-1))) : [320]
                       const nodes: JSX.Element[] = []
                       parents.forEach((p,idx)=>{
-                        nodes.push(<>
+                        nodes.push(
                           <text key={`pt-${p.id}`} x={parentXs[idx]} y={parentY} textAnchor="middle" fontSize={12} fill="#e2e8f0">{(p.preferred_name||p.first_name)} {(p.last_name||'')}</text>
+                        )
+                        nodes.push(
                           <path key={`p-line-${p.id}`} d={`M ${parentXs[idx]} ${parentY+6} L ${meX} ${meY-14}`} stroke="#64748b" />
-                        </>)
+                        )
                       })
-                      nodes.push(<>
+                      nodes.push(
                         <circle key="me" cx={meX} cy={meY} r={12} fill="#38bdf8" />
+                      )
+                      nodes.push(
                         <text key="me-t" x={meX} y={meY+28} textAnchor="middle" fontSize={12} fill="#e2e8f0">{(selected.preferred_name||selected.first_name)} {(selected.last_name||'')}</text>
-                      </>)
+                      )
                       spouses.forEach((s,idx)=>{
-                        nodes.push(<>
+                        nodes.push(
                           <circle key={`sp-${s.id}`} cx={spouseXs[idx]} cy={spouseY} r={10} fill="#f472b6"/>
+                        )
+                        nodes.push(
                           <path key={`m-${s.id}`} d={`M ${meX+12} ${meY} L ${spouseXs[idx]-12} ${spouseY}`} stroke="#fb7185" strokeDasharray="6 4"/>
-                        </>)
+                        )
                       })
                       children.forEach((c,idx)=>{
-                        nodes.push(<>
+                        nodes.push(
                           <text key={`ch-${c.id}`} x={childXs[idx]} y={childY} textAnchor="middle" fontSize={12} fill="#e2e8f0">{(c.preferred_name||c.first_name)} {(c.last_name||'')}</text>
+                        )
+                        nodes.push(
                           <path key={`c-line-${c.id}`} d={`M ${meX} ${meY+14} L ${childXs[idx]} ${childY-14}`} stroke="#64748b"/>
-                        </>)
+                        )
                       })
                       return nodes
                     })()}

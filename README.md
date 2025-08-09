@@ -1,36 +1,35 @@
-## Family Tree Web App
+Family Tree
+===========
 
-Stack: Next.js App Router, Tailwind CSS, Supabase (SSR + Browser client).
+Private family tree app built with Next.js + Tailwind. This repo contains no private data.
 
-### Getting started
+Quick start
+- Node 18+
+- Install: `npm i`
+- Dev: `npm run dev` (http://localhost:3000)
 
-1. Copy the provided Supabase env vars into a `.env.local` file in the project root:
+Data sources
+- Supabase (preferred): set env below
+- JSON fallback (for local testing without Supabase): create `data/sample.json` as `{ people: [], marriages: [], parent_child: [] }`
 
-```
-NEXT_PUBLIC_SUPABASE_URL=https://knqbdesytcdyzuxclnoy.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtucWJkZXN5dGNkeXp1eGNsbm95Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQxMTkxNjEsImV4cCI6MjA2OTY5NTE2MX0.z9dGc6cn3MXAUagOY8bJm9-XKgqgiZS8bk81dz70uf8
-```
+Env (.env.local)
+- `NEXT_PUBLIC_SUPABASE_URL="https://YOUR_PROJECT.supabase.co"`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY="YOUR_ANON_KEY"`
+- Optional: `USE_JSON_FALLBACK=true`
 
-2. Install and run:
+Editing
+- Toggle Edit mode from sidebar
+- Saves write to Supabase `people`, `marriages`, `parent_child`
+- Creating a person can also create marriage and parent-child rows
 
-```
-pnpm i
-pnpm dev
-```
+Security
+- robots blocked (public/robots.txt)
+- simple password gate before entering the site
 
-### Database tables
-
-- `people(id, first_name, last_name, preferred_name, gender, birth_date, birth_place, death_date, death_place, status, phone, facebook, photo)`
-- `marriages(id, partner_a, partner_b)`
-- `parent_child(id, parent_id, child_id)`
-
-### UI
-
-- SVG-based tree with pan (drag) and zoom (scroll)
-- Gender color coding (blue male, red female)
-- Status text color (green living, slate deceased)
-- Photo avatar if `photo` URL present
-- Dashed red line for marriages; curved arrow for parent-child
-- Sidebar search to center on a person
-
+Build
+- Dev: `npm run dev`
+- SSR build: `npm run build && npm start`
+- Static export (GitHub Pages):
+  - ensure `output: 'export'` in `next.config.mjs` (already set)
+  - `npm run predeploy && npm run deploy`
 

@@ -100,7 +100,10 @@ export function layoutTree(
 
   const getBirthRank = (id: string) => {
     const bd = nodeById.get(id)?.birth_date ?? null
-    const n = bd !== null ? parseInt(String(bd), 10) : Number.MAX_SAFE_INTEGER
+    // Support formats like "1990", "1990-05", "1990-05-12" by parsing prefix numbers
+    if (bd === null) return Number.MAX_SAFE_INTEGER
+    const match = String(bd).match(/\d{1,4}/)
+    const n = match ? parseInt(match[0], 10) : Number.MAX_SAFE_INTEGER
     return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER
   }
 
@@ -167,6 +170,16 @@ export function layoutTree(
     for (const [, blks] of orderedGroups) {
       blks.sort((a, b) => {
         if (a.rank !== b.rank) return a.rank - b.rank
+        // If both blocks are couples, compare by the minimum birth rank among all their children
+        const childrenRank = (ids: string[]): number => {
+          const childIds = new Set<string>()
+          for (const id of ids) (nodeById.get(id)?.children ?? []).forEach((c) => childIds.add(c))
+          if (childIds.size === 0) return Number.MAX_SAFE_INTEGER
+          return Math.min(...Array.from(childIds).map((cid) => getBirthRank(cid)))
+        }
+        const aChildRank = childrenRank(a.ids)
+        const bChildRank = childrenRank(b.ids)
+        if (aChildRank !== bChildRank) return aChildRank - bChildRank
         const aId = a.ids[0]
         const bId = b.ids[0]
         return nameOf(aId).localeCompare(nameOf(bId))

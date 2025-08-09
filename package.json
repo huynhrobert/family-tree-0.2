@@ -7,12 +7,16 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d out",
     "postinstall": "tailwindcss -v >/dev/null 2>&1 || true"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.0",
+    "@supabase/supabase-js": "^2.45.1",
     "autoprefixer": "^10.4.20",
     "clsx": "^2.1.1",
+    "gh-pages": "^6.0.0",
     "lucide-react": "^0.453.0",
     "next": "^14.2.5",
     "postcss": "^8.4.41",
